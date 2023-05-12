@@ -72,10 +72,7 @@ async def send_records(ev: CQEvent):
         await sv.bot.send(ev, '没有记录')
         return
 
-    # 按照时间顺序将记录合并为一条消息
-    messages = []
-    for i, record in enumerate(records):
-        messages.append(f'{i+1}. {record}')
+    messages = [f'{i + 1}. {record}' for i, record in enumerate(records)]
     message = '\n'.join(messages)
 
     # 发送记录消息
