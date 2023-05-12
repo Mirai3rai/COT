@@ -20,7 +20,6 @@ async def record(bot, ev: CQEvent):
     if match is not None and "记录" in ev.message.extract_plain_text():
         message_id = match["id"]
         pre_msg = await bot.get_msg(message_id=message_id)
-        print(pre_msg)
         hb = pre_msg["message"]
         if fidg := re.match(r'\[CQ:forward,id=(.*)\]', hb):
             try:
@@ -31,7 +30,6 @@ async def record(bot, ev: CQEvent):
                     await bot.finish(ev, '呃呃呃', at_sender=True)
                 exist = 0
                 for msg in fmsg:
-                    print(msg)
                     nkn = msg["sender"]['nickname']
                     uid = str(msg["sender"]['user_id'])
                     gid = str(msg["group_id"])
