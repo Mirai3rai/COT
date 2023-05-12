@@ -4,6 +4,7 @@ from hoshino import Service, get_bot, priv
 from hoshino.typing import CQEvent
 from .database import *
 import re
+import uuid
 
 sv = Service('record', help_='回复一条消息，发送"记录"可记录该消息，发送"看记录"可查看记录，最多50条')
 bot = get_bot()
@@ -13,11 +14,15 @@ async def init():
     connect()
     create_tables()
 
+def generate_unique_id(name,uid,gid,time,content,recorder_id):
+    return str(uuid.uuid3(uuid.NAMESPACE_DNS, f'{name}{uid}{gid}{time}{content}{recorder_id}'))
+
 @sv.on_message('group')
 async def record(bot, ev: CQEvent):
     message_id = None
     match = re.match(r"\[CQ:reply,id=(?P<id>.*)\]\[CQ:", str(ev.message))
-    if match is not None and "记录" in ev.message.extract_plain_text():
+    recorder_id = str(ev.user_id)
+    if match is not None and ev.message.extract_plain_text().strip() == '记录':
         message_id = match["id"]
         pre_msg = await bot.get_msg(message_id=message_id)
         hb = pre_msg["message"]
@@ -31,13 +36,14 @@ async def record(bot, ev: CQEvent):
                 exist = 0
                 for msg in fmsg:
                     nkn = msg["sender"]['nickname']
-                    uid = str(msg["sender"]['user_id'])
+                    recorded_user_id = str(msg["sender"]['user_id'])
                     gid = str(msg["group_id"])
                     time = msg["time"]
+                    message_id = generate_unique_id(name=nkn,uid=recorded_user_id,gid=gid,time=time,content=msg["content"],recorder_id=recorder_id)
                     try:
                         # 插入数据
-                        insert_message(name=nkn, uid=uid, content=msg["content"], time=time, message_id=f'{uid}-{time}', gid=gid)
-                    except KeyError:
+                        insert_message(name=nkn, uid=recorded_user_id, content=msg["content"], time=time, message_id=message_id, gid=gid, recorder_id=recorder_id)
+                    except KeyError as e:
                         await bot.send(ev, f'内容为{msg["content"]}的消息已存在~', at_sender=True)
                         exist += 1
                 await bot.send(ev, '该合并转发中的新消息记录完成~', at_sender=True) if exist != len(fmsg) else await bot.send(ev, '该合并转发中的消息已存在~', at_sender=True)
@@ -49,12 +55,13 @@ async def record(bot, ev: CQEvent):
                 uid = str(pre_msg["sender"]['user_id'])
                 time = pre_msg["time"]
                 gid = str(pre_msg["group_id"])
+                message_id = generate_unique_id(name=nkn,uid=uid,gid=gid,time=time,content=hb,recorder_id=recorder_id)
                 try:
                     # 插入数据
-                    insert_message(name=nkn, uid=uid, content=hb, time=time, message_id=f'{uid}-{time}', gid=gid)
-                except KeyError:
-                    await bot.finish(ev, '该消息已存在~', at_sender=True)
-                await bot.send(ev, '该消息记录完成~', at_sender=True)
+                    insert_message(name=nkn, uid=uid, content=hb, time=time, message_id=message_id, gid=gid, recorder_id=recorder_id)
+                    await bot.send(ev, '该消息记录完成~', at_sender=True)
+                except KeyError as e:
+                    await bot.send(ev, '该消息已存在~', at_sender=True)
             except ActionFailed:
                 await bot.finish(ev, '该消息已过期，请重新转发~', at_sender=True)
 
@@ -62,25 +69,25 @@ async def record(bot, ev: CQEvent):
 @sv.on_prefix(('查记录'))
 async def get_records(bot, ev: CQEvent):
     group_id = str(ev.group_id)
-    user_id = None
-
+    recorded_user_id = None
+    recorder_id = str(ev.user_id)
     if ev.message[0].type == 'at':
         bot_id = str(ev.self_id)
         if ev.message[0].data['qq'] == bot_id:
             await bot.finish(ev, "不能at机器人", at_sender=True)
         else:
-            user_id = str(ev.message[0].data['qq']) if ev.message[0].data['qq'] != 'all' else None
+            recorded_user_id = str(ev.message[0].data['qq']) if ev.message[0].data['qq'] != 'all' else None
 
     keyword = ev.message.extract_plain_text().strip()
 
-    if not keyword and not user_id: # 查询全部
-        query = get_message_by_gid_order_by_time(group_id)
+    if not keyword and not recorded_user_id: # 查询全部
+        query = get_message(gid=group_id, recorder_id=recorder_id)
     elif not keyword: # 查询某人
-        query = get_message_by_gid_and_uid_order_by_time(group_id, user_id)
-    elif not user_id: # 查询关键词
-        query = get_message_by_gid_and_keyword(group_id, keyword)
+        query = get_message(gid=group_id, recorder_id=recorder_id, uid=recorded_user_id)
+    elif not recorded_user_id: # 查询关键词
+        query = get_message(gid=group_id, recorder_id=recorder_id, keyword=keyword)
     else:
-        query = get_message_by_gid_and_uid_and_keyword(group_id, user_id, keyword)
+        query = get_message(gid=group_id, recorder_id=recorder_id, uid=recorded_user_id, keyword=keyword)
 
     await send_records(ev, query)
 
@@ -94,10 +101,47 @@ async def del_records(bot, ev: CQEvent):
         await sv.bot.send(ev, '请输入要删除的消息id', at_sender=True)
         return
     try:
-        delete_message_by_message_id(mid)
+        delete_message(message_id=mid)
         await sv.bot.send(ev, f'已删除消息id为{mid}的记录~', at_sender=True)
     except KeyError:
         await sv.bot.send(ev, f'消息id为{mid}的记录不存在~', at_sender=True)
+
+@sv.on_prefix(('复制记录'))
+async def copy_records(bot, ev: CQEvent):
+    
+    mid = ev.message.extract_plain_text().strip()
+
+    if not mid:
+        await bot.finish(ev, '请输入要复制的消息id', at_sender=True)
+
+    try:
+        query = get_message(message_id=mid)
+    except KeyError:
+        await bot.finish(ev, f'消息id为{mid}的记录不存在~', at_sender=True)
+
+    for record in query:
+        # 获取消息所在群号
+        gid = record.gid
+        # 获取发送者的qq号
+        uid = record.uid
+        # 获取消息记录者的qq号
+        recorder_id = record.recorder_id
+        if recorder_id == str(ev.user_id):
+            await bot.finish(ev, '不能复制自己的记录哦~', at_sender=True)
+        # 获取发送者的群昵称
+        name = record.name
+        # 获取消息内容
+        msg = record.content
+        # 获取消息发送时间
+        time = record.time
+        # 获取消息id
+        message_id = generate_unique_id(name=name,uid=uid,gid=gid,time=time,content=msg,recorder_id=str(ev.user_id))
+        try:
+            # 插入数据
+            insert_message(name=name, uid=uid, content=msg, time=time, message_id=message_id, gid=str(ev.group_id), recorder_id=str(ev.user_id))
+            await bot.send(ev, '该消息记录完成~', at_sender=True)
+        except KeyError:
+            await bot.send(ev, '该消息已存在~', at_sender=True)
 
 def merge_msg(data, msg, time, name, uid):
     data.append({
