@@ -91,4 +91,9 @@ def delete_message(name=None, uid=None, content=None, message_id=None, gid=None,
     if recorder_id:
         query = query.where(Message.recorder_id == recorder_id)
     return query.execute()
+
+# 数据迁移，从一个群迁移到另一个群
+def migrate_message(from_gid, to_gid):
+    query = Message.update(gid=to_gid).where(Message.gid == from_gid)
+    return query.execute()
     
